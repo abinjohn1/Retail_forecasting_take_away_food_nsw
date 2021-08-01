@@ -1,0 +1,362 @@
+---
+title: "Retail Project"
+author: "Abin John"
+date: "23/05/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(fpp3)
+```
+
+# Takeaway food services-New South Wales
+
+The given data set is regarding the turnover of Takeway food service industry in New South Whales. 
+
+```{r echo=FALSE} 
+set.seed(29202167)
+myseries <- aus_retail %>%
+  filter(
+    `Series ID` == sample(aus_retail$`Series ID`,1),
+    Month < yearmonth("2018 Jan")
+  )
+```
+
+1.A discussion of the statistical features of the original data.
+
+```{r echo=FALSE}
+gg_tsdisplay(myseries)
+
+
+myseries %>%
+  gg_subseries(Turnover) +
+  labs(y = "Turnover (million $AUD)", x="")
+```
+
+The retail data of New South Wales for 'Takeaway food services' industry  has a clear upward trend in turnover from 1982 to up untill now.
+
+The seasonality in the takeaway food industry has changed quite a lot  from a moderately flat seasonal years.The data has a seasonal pattern which increases in size approximately proportionally to the Turnover. Therefore, the data has multiplicative seasonality.The recent years exhibits a seasonal sharp upward trend from February to March and then flattens through June .From June to July we can see a slight increase in seasonal trend .Also the data shows steep increase in seasonal trend from November to January where it reaches on the peak by December before it fall to the trough on February.
+
+The data has small variance in the early years and higher variance in the later years .The variability in the data appears proportional to the amount of turnover (level of the series) over the time period.
+
+In addition, the  slow decrease in the lag of ACF plot  suggests a clear non stationary data.
+
+
+2.Explanation of transformations and differencing used. You should use a unit-root test as part of the discussion.
+
+#ARIMA model
+In order to create  arima models, first we need to make the data stationary .
+Here a log transformation can regularise the variance in the data.
+
+log transformation
+```{r echo=FALSE}
+
+
+myseries %>%
+  gg_tsdisplay(log(Turnover),plot_type = "partial")
+
+myseries %>%
+  features(
+    log(Turnover),
+    features=list(unitroot_kpss,unitroot_nsdiffs)
+  )
+
+```
+From the Acf plot ,we can see that the Acf of data decreases slowly, which means that the data is  non stationary. Also the kpss test shows p value 0.1 > 0.05 and  at 5 % significance level we can reject the null hypothesis that the data is stationary.
+
+The next step to make the data stationary is by doing a seasonal difference on the transformed data. 
+
+```{r echo=FALSE}
+myseries %>%
+  gg_tsdisplay(
+    difference(
+      log(Turnover),lag = 12),plot_type = "partial",lag_max = 36)
+
+
+```
+
+Here the Acf plot shows data drops to zero relatively quickly  which suggests a stationary data and we can check whether a regular difference is needed using the Kpss unitroot test.
+
+```{r echo=FALSE}
+myseries %>%
+  features(
+    difference(log(Turnover),lag=12),
+    features=list(unitroot_kpss,unitroot_ndiffs)
+  )
+
+```
+
+Here the null hypothesis is that the data are stationary
+and non-seasonal.
+Since the p value 0.1 > 0.05 at 5% significance level we fail to reject the null hypothesis. But the Acf and Pacf plot shows several significant spikes so the data still looks non stationary.
+
+
+First order differencing
+
+```{r echo=FALSE}
+myseries %>%
+  gg_tsdisplay(
+    difference(
+      difference(
+      log(Turnover),lag = 12)),plot_type = "partial",lag_max = 36)
+
+
+```
+
+
+
+```{r echo=FALSE}
+
+fit_ar<-myseries %>%
+  model(
+    at_ar=ARIMA(log(Turnover)),
+    at_best=ARIMA(log(Turnover), stepwise = FALSE,approximation =FALSE),
+   
+    ar110310=ARIMA(log(Turnover)~0+pdq(1,1,0)+PDQ(2,1,0)),
+    ar110011=ARIMA(log(Turnover)~0+pdq(1,1,0)+PDQ(0,1,1)),
+    ar011011=ARIMA(log(Turnover)~0+pdq(0,1,1)+PDQ(0,1,1)),
+    ar011310=ARIMA(log(Turnover)~0+pdq(0,1,1)+PDQ(2,1,0))
+    
+    )
+
+glance(fit_ar) %>% select(.model,AICc)%>%
+  arrange(AICc)
+accuracy(fit_ar)%>%select(.model,RMSE)%>%
+  arrange(RMSE)
+
+
+fc_ar<-fit_ar%>%
+  forecast(h=24)
+
+```
+
+
+
+```{r echo=FALSE}
+#ETS model
+
+myseries %>%
+  model(STL(Turnover)) %>%
+  components()%>%
+  autoplot()
+
+
+fit_ets<-myseries %>%
+  model(
+    
+    auto=ETS(Turnover),
+    madm =ETS(Turnover~error("M")+trend("Ad")+season("M")),
+    mam =ETS(Turnover~error("M")+trend("A")+season("M"))
+   )
+glance(fit_ets) %>% arrange(AICc)
+
+
+accuracy(fit_ets)%>%arrange(RMSE)
+
+fc_ets<-fit_ets %>%
+  forecast(h = 24)
+
+fc_ar %>%
+  autoplot(myseries,level=NULL)+labs(title="Forecast using different ARIMA models")
+
+
+fc_ets %>%
+  autoplot(myseries,level=NULL)+labs(title="Forecast using different ETS models")
+
+
+```
+
+3.A description of the methodology used to create a short-list of appropriate ARIMA models and ETS models.
+
+In order to shortlist ARIMA models , I have looked at the acf and pacf plot of the staionary data.Then I have chosen appropriate p,d,q, P,D,Q looking at the significant lags.In addition to this ,I have used an automatic selection of ARIMA model as well. 
+
+For the ETS model selection , I have looked at the gg_season and gg_subseries plot and decided to use multiplicative seasonality with both additive trend and additive damp trend.Also I have added an automatic selection ETS model which in turn picked the same model as I have manually chosen.
+
+
+Include discussion of AIC values as well as results from applying the models to a test-set consisting of the last 24 months of data provided.
+```{r echo=FALSE}
+
+myseries_full <- aus_retail %>%
+  filter(
+    `Series ID` == "A3349792X")
+
+myseries_tr <- myseries_full %>%
+  slice(1:(n() - 24)) 
+
+
+fit_tr<-myseries_tr %>%
+  model(
+ 
+    auto=ETS(Turnover),
+    madm =ETS(Turnover~error("M")+trend("Ad")+season("M")),
+    mam =ETS(Turnover~error("M")+trend("A")+season("M")),
+    at_ar=ARIMA(log(Turnover)),
+    at_best=ARIMA(log(Turnover)~1+pdq(2,0,0)+PDQ(0,1,1)),
+    
+    ar110011=ARIMA(log(Turnover)~0+pdq(1,1,0)+PDQ(0,1,1)),
+    ar011011=ARIMA(log(Turnover)~0+pdq(0,1,1)+PDQ(0,1,1)),
+    ar011310=ARIMA(log(Turnover)~0+pdq(0,1,1)+PDQ(2,1,0))
+   )
+
+fc_tr <- fit_tr %>%
+  forecast(h=24)
+
+fc_tr %>% autoplot(filter(myseries_full,Month>yearmonth("2005 Jan")),level=NULL)
+
+
+glance(fit_tr) %>%select(.model,AICc)%>%
+  arrange(AICc)
+
+```
+
+We cannot compare ETS and ARIMA models using same AICc value.Also the models we compare should have the same number of transformation and differencing applied.Here we can compare the ETS models as they all have same number of transformation and we can see that the madm model is having the lowest AICc among ETS models.We can say that madm will be the best ets model according to AICc .
+
+```{r echo=FALSE}
+fit_tr%>%select(at_ar,at_best,ar110011,ar011011,ar011310 )
+```
+
+Here we can see that the order of difference for all ARIMA models are not same .So we cannot compare  the ARIMA models using AICc.
+
+```{r echo=FALSE}
+accuracy(fc_tr,myseries_full) %>%
+  arrange(RMSE)
+```
+The best way to compare different models is by using RMSE value. Here we can see that 
+ARIMA at_ar is the best model with the lowest RMSE.The Madm also have low RMSE.
+
+The automatic ARIMA has picked up ARIMA(2,0,2)(0,1,1)[12] w/ drift as the best model for the data set.As far as the ETS model concerned,  the training data set picked up MAdM as the best model.
+
+Choose one ARIMA model and one ETS model based on this analysis and show parameter estimates, residual diagnostics, forecasts and prediction intervals for both models. Diagnostic checking for both models should include ACF graphs as well as the Ljung-Box test.
+
+
+**Parameter estimates for the ARIMA model**
+
+```{r echo=FALSE}
+fit_tr %>%select(at_ar)%>%report()
+```
+
+**Parameter estimates for the ARIMA model**
+```{r echo=FALSE}
+fit_tr %>%select(madm)%>%report()
+```
+
+**ETS residual plot**
+```{r echo=FALSE}
+
+fit_tr %>%
+  select(madm)%>% 
+  gg_tsresiduals(lag_max=48)
+```
+
+The acf plot of ETS model shows no significant spikes at early and seasonal lags which shows the residuals could be white noise.Also the histogram looks like normally distributed.We can do the Ljung-Box test to statistically confirm it.
+
+**Ljung-Box test**
+```{r echo=FALSE}
+fit_tr %>%
+  select(madm)%>% 
+  augment() %>%
+  features(.innov, ljung_box, lag = 48, dof = 17)
+```
+
+Here the P value is less than 0.05 and we reject the null hypothesis that the residual are white noise. ETS(M,A,M) failed Ljung-Box test.
+
+**ARIMA parameter estimate**
+```{r echo=FALSE}
+fit_tr %>%
+  select(at_ar )%>%
+  report()
+```
+
+**ARIMA residual plot**
+
+```{r echo=FALSE}
+fit_tr %>%
+  select(at_ar)%>% 
+  gg_tsresiduals(lag_max=48)
+```
+
+The acf plot of ARIMA model also haven't got any significant spike at the early lags and in the seasonal lags except at 36.It looks like almost white noise . We can confirm it by looking at the Ljung-Box test.
+
+**Ljung-Box test**
+```{r echo=FALSE}
+
+fit_tr %>%
+  select(at_ar)%>% 
+  augment() %>%
+  features(.innov, ljung_box, lag = 36, dof = 6)
+
+```
+
+Here the P value is less greater than 0.05 and therefore we  fail to the null hypothesis that the residual are white noise.So the  ARIMA(0,1,2)(2,1,2)[12]  passed Ljung-Box test.
+
+**Forecast of ETS and ARIMA of 80% prediction interval**
+```{r echo=FALSE}
+fc_tr %>%
+  filter(.model==c("madm","at_ar"))%>%
+  autoplot(filter(myseries_full,Month>yearmonth("2005 Jan")))+
+  labs(title = "ETS and ARIMA forecast")
+```
+
+
+
+
+Comparison of the results from each of your preferred models. Which method do you think gives the better forecasts? Explain with reference to the test-set.
+
+Here the ARIMA model ,at_ar (ARIMA(2,0,2)(0,1,1)[12] w/ drift ) looks better in forecasting the test set. It has almost followed the actual data.It has also picked up seasonality and  trend well.
+The ETS model hasn't picked up the seasonality well .It may be due to the fact that the model have captured a dominant trend in the data set.
+
+
+Apply your two chosen models to the full data set and produce out-of-sample point forecasts and 80% prediction intervals for each model for two years past the end of the data provided.
+
+```{r echo=FALSE}
+fit_best<-myseries_full %>%
+  model(
+    at_ar=ARIMA(log(Turnover)~1+pdq(2,0,2)+PDQ(0,1,1)),
+    madm =ETS(Turnover~error("M")+trend("Ad")+season("M")) 
+       )
+
+fc_best<-fit_best %>%
+  forecast(h="2 years")
+fc_best
+
+
+```
+**80% prediction intervals for two years **
+```{r echo=FALSE}
+
+fc_pred_int<-hilo(fc_best$Turnover,80)
+fc_pred_int
+fc_best%>%
+  autoplot(myseries_full,level=80)+labs(title = "Forecast for 2 years using ETS & ARIMA")
+```
+
+
+
+Obtain up-to-date data from the ABS website (Cat. 8501.0, Table 11), and compare your forecasts with the actual numbers. How well did you do? [Hint: the readabs package can help in getting the data into R.]
+```{r echo=FALSE}
+library(readabs)
+abs<-read_abs(cat_no = "8501.0", tables = 11, path = "data/ABS",
+  metadata = TRUE, show_progress_bars = TRUE, retain_files = TRUE)
+
+nsw.abs <- abs %>% filter(series_id == "A3349792X") %>% select(series, date,value,series_id)
+
+nsw.abs<- nsw.abs %>%
+ mutate(State="New South Wales" ,Industry="Takeaway food services",`Series ID`="A3349792X",Month=yearmonth(date),Turnover=value)%>%
+  select(-series,-date,-value ,series_id ) %>%
+  as_tsibble(key = c(State, Industry))
+
+fc_best%>%
+  autoplot(alpha=0.4)+
+  autolayer(filter(nsw.abs,Month>yearmonth("2015 Jan")))+labs(title = "Actual vs Predicted using ETS & ARIMA")
+```
+
+Both the ETS & ARIMA model has done a reasonably well until 2020. In fact, looking at the plot ETS(MAdM) model has done a slightly better job in predicting the forecast until 2020.The main reason for the disparity in actual data was due to the restrictions imposed in the takeaway food industry during Covid19 lock down. 
+ 
+A discussion of benefits and limitations of the models for your data.
+
+Both the models have picked up the trend and seasonality in the dataset quite well.  
+One of the drawbacks in these models is that it fails to respond to the unpredictable future events.In fact the actual data has occurred outside the prediction interval of both the models. 
+
